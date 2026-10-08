@@ -6,8 +6,10 @@ from datetime import datetime, timezone
 from sqlalchemy import create_engine
 from botocore.client import Config
 
-# PostgreSQL local container connection
-DB_URL = "postgresql+psycopg://apex_admin:apex_password@localhost:5433/apex_warehouse"
+DB_URL = os.getenv(
+    "DB_URL", 
+    "postgresql+psycopg://apex_admin:apex_password@localhost:5433/apex_warehouse"
+)
 
 def get_s3_client():
     return boto3.client(
@@ -19,33 +21,22 @@ def get_s3_client():
         region_name="us-east-1"
     )
 
-def run_gold_transformation():
-    print("--- Processing Silver -> Gold Aggregations ---")
-    s3 = get_s3_client()
-    bucket_name = "apex-data-lake"
+def calculate_gold_regional_performance(df_orders: pd.DataFrame, df_returns: pd.DataFrame) -> pd.DataFrame:
+    """Pure transformation logic for Regional Performance aggregation."""
+    df_orders = df_orders.copy()
+    df_returns = df_returns.copy()
 
-    # 1. Fetch Silver Datasets from S3
-    orders_obj = s3.get_object(Bucket=bucket_name, Key="silver/orders/orders_clean.parquet")
-    returns_obj = s3.get_object(Bucket=bucket_name, Key="silver/returns/returns_clean.parquet")
-
-    df_orders = pd.read_parquet(io.BytesIO(orders_obj['Body'].read()))
-    df_returns = pd.read_parquet(io.BytesIO(returns_obj['Body'].read()))
-
-    # 2. Enrich Orders with Return Status
     df_returns["is_returned"] = True
     df_merged = df_orders.merge(
-        df_returns[["order_id", "is_returned"]], 
+        df_returns[["order_id", "is_returned"]].drop_duplicates(subset=["order_id"]), 
         on="order_id", 
         how="left"
     )
     df_merged["is_returned"] = df_merged["is_returned"].fillna(False)
 
-    # Calculate Net Revenue (excluding returned orders)
     df_merged["net_amount_usd"] = df_merged.apply(
         lambda r: 0.0 if r["is_returned"] else r["amount_usd"], axis=1
     )
-
-    # 3. Aggregation A: Regional Performance Gold Table
     df_merged["date"] = pd.to_datetime(df_merged["transaction_date"]).dt.date
     
     dim_regional = df_merged.groupby(["date", "region"]).agg(
@@ -60,7 +51,26 @@ def run_gold_transformation():
         (dim_regional["returned_orders"] / dim_regional["total_orders"]) * 100
     ).round(2)
 
-    # 4. Aggregation B: Customer Metrics Gold Table
+    return dim_regional
+
+def calculate_gold_customer_metrics(df_orders: pd.DataFrame, df_returns: pd.DataFrame) -> pd.DataFrame:
+    """Pure transformation logic for Customer Metrics aggregation."""
+    df_orders = df_orders.copy()
+    df_returns = df_returns.copy()
+
+    df_returns["is_returned"] = True
+    df_merged = df_orders.merge(
+        df_returns[["order_id", "is_returned"]].drop_duplicates(subset=["order_id"]), 
+        on="order_id", 
+        how="left"
+    )
+    df_merged["is_returned"] = df_merged["is_returned"].fillna(False)
+
+    df_merged["net_amount_usd"] = df_merged.apply(
+        lambda r: 0.0 if r["is_returned"] else r["amount_usd"], axis=1
+    )
+    df_merged["date"] = pd.to_datetime(df_merged["transaction_date"]).dt.date
+
     dim_customer = df_merged.groupby("customer_id").agg(
         total_orders_placed=("order_id", "count"),
         lifetime_gross_spend=("amount_usd", "sum"),
@@ -69,8 +79,26 @@ def run_gold_transformation():
         last_active_date=("date", "max")
     ).reset_index()
 
-    # 5. Load into PostgreSQL Gold Warehouse
-    print("Writing Gold data to PostgreSQL Data Warehouse (`apex_dw`)...")
+    return dim_customer
+
+def run_gold_transformation():
+    print("--- Processing Silver -> Gold Aggregations ---")
+    s3 = get_s3_client()
+    bucket_name = "apex-data-lake"
+
+    # Fetch Silver Datasets from S3
+    orders_obj = s3.get_object(Bucket=bucket_name, Key="silver/orders/orders_clean.parquet")
+    returns_obj = s3.get_object(Bucket=bucket_name, Key="silver/returns/returns_clean.parquet")
+
+    df_orders = pd.read_parquet(io.BytesIO(orders_obj['Body'].read()))
+    df_returns = pd.read_parquet(io.BytesIO(returns_obj['Body'].read()))
+
+    # Compute Aggregations using pure functions
+    dim_regional = calculate_gold_regional_performance(df_orders, df_returns)
+    dim_customer = calculate_gold_customer_metrics(df_orders, df_returns)
+
+    # Load into PostgreSQL Gold Warehouse
+    print("Writing Gold data to PostgreSQL Data Warehouse (`apex_warehouse`)...")
     engine = create_engine(DB_URL)
 
     dim_regional.to_sql("gold_regional_performance", engine, if_exists="replace", index=False)
