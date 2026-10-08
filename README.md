@@ -1,5 +1,7 @@
 # Apex Retail Analytics: Local Defensive Medallion Lakehouse
 
+![CI Pipeline](https://github.com/Harish-png655/apex-retail-analytics/actions/workflows/ci.yml/badge.svg)
+
 An end-to-end, zero-cloud-cost Data Lakehouse architecture implementing **Bronze**, **Silver**, and **Gold** processing tiers. Built using **LocalStack S3**, **PostgreSQL**, **Pandas**, **PyArrow**, and **Boto3** on Windows/Docker Desktop.
 
 This architecture enforces strict schema validation, defensive quality routing to a **Dead-Letter Queue (DLQ)** for non-compliant records, and relational star-schema loading for downstream analytics.
@@ -76,18 +78,27 @@ This architecture enforces strict schema validation, defensive quality routing t
 
 ```text
 apex-retail-analytics/
+├── .github/
+│   └── workflows/
+│       └── ci.yml                  # Automated GitHub Actions testing pipeline
+├── .flake8                         # Flake8 linter configuration
 ├── docker-compose.yml              # LocalStack S3 & PostgreSQL service definitions
 ├── main.py                         # Single-entrypoint pipeline orchestrator
+├── pytest.ini                      # Pytest setup configuration
 ├── README.md                       # Architecture & execution documentation
 ├── requirements.txt                # Python environment dependencies
 ├── scripts/
 │   ├── init_minio.py               # LocalStack S3 bucket provisioner
 │   ├── data_gen/
-│   │   └── upload_to_s3.py         # Mock raw data generator & S3 loader
+│   │   ├── generate_data.py        # Raw data generation script
+│   │   └── upload_to_s3.py         # S3 landing uploader
 │   └── etl/
 │       ├── bronze_ingestion.py     # Bronze layer metadata enrichment
 │       ├── silver_transformation.py# Silver DQ engine & DLQ router
 │       └── gold_transformation.py  # Gold metrics compiler & Postgres loader
+└── tests/
+    ├── test_silver_transformation.py # Silver layer DQ unit tests
+    └── test_gold_transformation.py   # Gold metrics aggregation unit tests
 ```
 
 ---
@@ -105,7 +116,7 @@ cd apex-retail-analytics
 python -m venv venv
 source venv/Scripts/activate  # On Windows Git Bash
 
-pip install pandas pyarrow boto3 sqlalchemy psycopg
+pip install -r requirements.txt
 ```
 
 ### 2. Infrastructure Initialization
@@ -168,3 +179,22 @@ Ensure your virtual environment is active, then run:
 
 ```bash
 pytest
+```
+
+### Code Quality & Formatting
+Run automated style and linting checks across all scripts and tests:
+
+```bash
+# Verify Black formatting standard
+black --check scripts/ tests/
+
+# Check PEP 8 compliance and code errors
+flake8 scripts/ tests/
+```
+### Continuous Integration (GitHub Actions)
+Every push or pull_request to the main branch automatically triggers .github/workflows/ci.yml to:
+
+* Provision a clean Python 3.11 runner environment.
+* Install pinned pipeline dependencies from requirements.txt.
+* Perform static lint checks via flake8.
+* Run the full pytest suite across Silver Data Quality rules and Gold metrics aggregations.
