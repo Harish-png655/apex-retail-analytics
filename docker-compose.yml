@@ -1,0 +1,37 @@
+services:
+  # --- S3 Storage Emulation (LocalStack Open-Source) ---
+  s3:
+    image: localstack/localstack:3.8.0
+    container_name: apex_s3
+    ports:
+      - "4566:4566"
+    environment:
+      - SERVICES=s3
+      - AWS_DEFAULT_REGION=us-east-1
+      - ENFORCE_IAM=0
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4566/_localstack/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # --- Gold Layer Data Warehouse ---
+  postgres:
+    image: postgres:15-alpine
+    container_name: apex_postgres
+    ports:
+      - "5433:5432"
+    environment:
+      POSTGRES_USER: apex_admin
+      POSTGRES_PASSWORD: apex_password
+      POSTGRES_DB: apex_warehouse
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U apex_admin -d apex_warehouse"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  pgdata:
