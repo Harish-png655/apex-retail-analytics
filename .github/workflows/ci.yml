@@ -3,8 +3,20 @@ name: Medallion Pipeline CI
 on:
   push:
     branches: [ main ]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - '.gitignore'
   pull_request:
     branches: [ main ]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - '.gitignore'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   test:
@@ -18,6 +30,7 @@ jobs:
       uses: actions/setup-python@v5
       with:
         python-version: '3.11'
+        cache: 'pip'  # Caches dependencies to speed up future runs
 
     - name: Install Dependencies
       run: |
@@ -25,10 +38,14 @@ jobs:
         pip install -r requirements.txt
         pip install flake8 black
 
+    - name: Check Code Formatting (Black)
+      run: |
+        black --check scripts/ tests/
+
     - name: Run Flake8 Code Linting
       run: |
-        # Stop build if there are Python syntax errors or undefined symbols
-        flake8 scripts/ tests/ --count --select=E9,F63,F7,F82 --show-source --statistics
+        # Stop build if there are syntax errors, PEP8 violations, or undefined symbols
+        flake8 scripts/ tests/
 
     - name: Run Pytest Suite
       run: |
