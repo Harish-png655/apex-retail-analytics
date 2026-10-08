@@ -2,7 +2,9 @@ import pandas as pd
 import pytest
 
 from scripts.etl.gold_transformation import (
-    calculate_gold_customer_metrics, calculate_gold_regional_performance)
+    calculate_gold_customer_metrics,
+    calculate_gold_regional_performance,
+)
 
 
 @pytest.fixture
