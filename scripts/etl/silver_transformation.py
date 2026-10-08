@@ -67,12 +67,14 @@ def transform_silver_orders(s3, bucket_name, dlq_bucket):
 
     # Save Quarantined Records
     if len(quarantine_df) > 0:
-        dlq_key = f"silver_quarantine/orders_quarantine_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}.parquet"
+        ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+        dlq_key = f"silver_quarantine/orders_quarantine_{ts}.parquet"
         dlq_buf = io.BytesIO()
         pq.write_table(pa.Table.from_pandas(quarantine_df), dlq_buf)
         s3.put_object(Bucket=dlq_bucket, Key=dlq_key, Body=dlq_buf.getvalue())
         print(
-            f"Quarantined Orders: {len(quarantine_df)} rows -> s3://{dlq_bucket}/{dlq_key}"
+            f"Quarantined Orders: {len(quarantine_df)} rows -> "
+            f"s3://{dlq_bucket}/{dlq_key}"
         )
 
 
