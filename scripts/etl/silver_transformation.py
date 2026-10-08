@@ -16,13 +16,9 @@ def get_s3_client():
         region_name="us-east-1"
     )
 
-def transform_silver_orders(s3, bucket_name, dlq_bucket):
-    print("--- Processing Orders (Bronze -> Silver) ---")
-    bronze_key = "bronze/orders_raw/orders_raw_bronze.parquet"
-    
-    # Read Bronze Parquet
-    obj = s3.get_object(Bucket=bucket_name, Key=bronze_key)
-    df = pd.read_parquet(io.BytesIO(obj['Body'].read()))
+def validate_and_clean_orders(df: pd.DataFrame):
+    """Pure transformation function for unit testing."""
+    df = df.copy()
     
     # Type Casting
     df["amount_usd"] = pd.to_numeric(df["amount_usd"], errors="coerce")
@@ -41,19 +37,30 @@ def transform_silver_orders(s3, bucket_name, dlq_bucket):
     clean_df = df[valid_mask].drop_duplicates(subset=["order_id"]).copy()
     quarantine_df = df[~valid_mask].copy()
 
-    # Append audit metadata
     clean_df["_processed_at"] = datetime.now(timezone.utc).isoformat()
+    if len(quarantine_df) > 0:
+        quarantine_df["_quarantine_reason"] = "Failed Schema/DQ rules"
 
-    # Save Clean Records to Silver Layer
+    return clean_df, quarantine_df
+
+def transform_silver_orders(s3, bucket_name, dlq_bucket):
+    print("--- Processing Orders (Bronze -> Silver) ---")
+    bronze_key = "bronze/orders_raw/orders_raw_bronze.parquet"
+    
+    obj = s3.get_object(Bucket=bucket_name, Key=bronze_key)
+    df = pd.read_parquet(io.BytesIO(obj['Body'].read()))
+    
+    clean_df, quarantine_df = validate_and_clean_orders(df)
+
+    # Save Clean Records
     silver_key = "silver/orders/orders_clean.parquet"
     out_buf = io.BytesIO()
     pq.write_table(pa.Table.from_pandas(clean_df), out_buf)
     s3.put_object(Bucket=bucket_name, Key=silver_key, Body=out_buf.getvalue())
     print(f"Clean Orders saved: {len(clean_df)} rows -> s3://{bucket_name}/{silver_key}")
 
-    # Save Invalid Records to Dead-Letter Queue
+    # Save Quarantined Records
     if len(quarantine_df) > 0:
-        quarantine_df["_quarantine_reason"] = "Failed Schema/DQ rules"
         dlq_key = f"silver_quarantine/orders_quarantine_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}.parquet"
         dlq_buf = io.BytesIO()
         pq.write_table(pa.Table.from_pandas(quarantine_df), dlq_buf)
@@ -72,7 +79,6 @@ def transform_silver_returns(s3, bucket_name, dlq_bucket):
     elif "return_date" in df.columns:
         df["processed_timestamp"] = pd.to_datetime(df["return_date"], errors="coerce")
 
-    # Match ID columns flexibly
     return_id_col = "return_id" if "return_id" in df.columns else df.columns[0]
     order_id_col = "order_id" if "order_id" in df.columns else df.columns[1]
 
