@@ -8,7 +8,7 @@ s3 = boto3.client(
     aws_access_key_id="test",
     aws_secret_access_key="test",
     config=Config(signature_version="s3v4"),
-    region_name="us-east-1"
+    region_name="us-east-1",
 )
 
 buckets = ["apex-data-lake", "apex-dead-letter-queue"]

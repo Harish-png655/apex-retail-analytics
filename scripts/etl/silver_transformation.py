@@ -1,10 +1,12 @@
 import io
+from datetime import datetime, timezone
+
 import boto3
 import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
-from datetime import datetime, timezone
 from botocore.client import Config
+
 
 def get_s3_client():
     return boto3.client(
@@ -13,13 +15,14 @@ def get_s3_client():
         aws_access_key_id="test",
         aws_secret_access_key="test",
         config=Config(signature_version="s3v4"),
-        region_name="us-east-1"
+        region_name="us-east-1",
     )
+
 
 def validate_and_clean_orders(df: pd.DataFrame):
     """Pure transformation function for unit testing."""
     df = df.copy()
-    
+
     # Type Casting
     df["amount_usd"] = pd.to_numeric(df["amount_usd"], errors="coerce")
     df["seller_fee"] = pd.to_numeric(df["seller_fee"], errors="coerce")
@@ -27,11 +30,11 @@ def validate_and_clean_orders(df: pd.DataFrame):
 
     # Data Quality Validation Rules
     valid_mask = (
-        df["order_id"].notna() &
-        df["customer_id"].notna() &
-        (df["amount_usd"] > 0) &
-        (df["seller_fee"] >= 0) &
-        df["transaction_date"].notna()
+        df["order_id"].notna()
+        & df["customer_id"].notna()
+        & (df["amount_usd"] > 0)
+        & (df["seller_fee"] >= 0)
+        & df["transaction_date"].notna()
     )
 
     clean_df = df[valid_mask].drop_duplicates(subset=["order_id"]).copy()
@@ -43,13 +46,14 @@ def validate_and_clean_orders(df: pd.DataFrame):
 
     return clean_df, quarantine_df
 
+
 def transform_silver_orders(s3, bucket_name, dlq_bucket):
     print("--- Processing Orders (Bronze -> Silver) ---")
     bronze_key = "bronze/orders_raw/orders_raw_bronze.parquet"
-    
+
     obj = s3.get_object(Bucket=bucket_name, Key=bronze_key)
-    df = pd.read_parquet(io.BytesIO(obj['Body'].read()))
-    
+    df = pd.read_parquet(io.BytesIO(obj["Body"].read()))
+
     clean_df, quarantine_df = validate_and_clean_orders(df)
 
     # Save Clean Records
@@ -57,7 +61,9 @@ def transform_silver_orders(s3, bucket_name, dlq_bucket):
     out_buf = io.BytesIO()
     pq.write_table(pa.Table.from_pandas(clean_df), out_buf)
     s3.put_object(Bucket=bucket_name, Key=silver_key, Body=out_buf.getvalue())
-    print(f"Clean Orders saved: {len(clean_df)} rows -> s3://{bucket_name}/{silver_key}")
+    print(
+        f"Clean Orders saved: {len(clean_df)} rows -> s3://{bucket_name}/{silver_key}"
+    )
 
     # Save Quarantined Records
     if len(quarantine_df) > 0:
@@ -65,17 +71,22 @@ def transform_silver_orders(s3, bucket_name, dlq_bucket):
         dlq_buf = io.BytesIO()
         pq.write_table(pa.Table.from_pandas(quarantine_df), dlq_buf)
         s3.put_object(Bucket=dlq_bucket, Key=dlq_key, Body=dlq_buf.getvalue())
-        print(f"Quarantined Orders: {len(quarantine_df)} rows -> s3://{dlq_bucket}/{dlq_key}")
+        print(
+            f"Quarantined Orders: {len(quarantine_df)} rows -> s3://{dlq_bucket}/{dlq_key}"
+        )
+
 
 def transform_silver_returns(s3, bucket_name, dlq_bucket):
     print("--- Processing Returns (Bronze -> Silver) ---")
     bronze_key = "bronze/returns_raw/returns_raw_bronze.parquet"
-    
+
     obj = s3.get_object(Bucket=bucket_name, Key=bronze_key)
-    df = pd.read_parquet(io.BytesIO(obj['Body'].read()))
+    df = pd.read_parquet(io.BytesIO(obj["Body"].read()))
 
     if "processed_timestamp" in df.columns:
-        df["processed_timestamp"] = pd.to_datetime(df["processed_timestamp"], errors="coerce")
+        df["processed_timestamp"] = pd.to_datetime(
+            df["processed_timestamp"], errors="coerce"
+        )
     elif "return_date" in df.columns:
         df["processed_timestamp"] = pd.to_datetime(df["return_date"], errors="coerce")
 
@@ -84,7 +95,6 @@ def transform_silver_returns(s3, bucket_name, dlq_bucket):
 
     valid_mask = df[return_id_col].notna() & df[order_id_col].notna()
     clean_df = df[valid_mask].drop_duplicates(subset=[return_id_col]).copy()
-    quarantine_df = df[~valid_mask].copy()
 
     clean_df["_processed_at"] = datetime.now(timezone.utc).isoformat()
 
@@ -92,13 +102,17 @@ def transform_silver_returns(s3, bucket_name, dlq_bucket):
     out_buf = io.BytesIO()
     pq.write_table(pa.Table.from_pandas(clean_df), out_buf)
     s3.put_object(Bucket=bucket_name, Key=silver_key, Body=out_buf.getvalue())
-    print(f"Clean Returns saved: {len(clean_df)} rows -> s3://{bucket_name}/{silver_key}")
+    print(
+        f"Clean Returns saved: {len(clean_df)} rows -> s3://{bucket_name}/{silver_key}"
+    )
+
 
 def run_silver_transformation():
     s3 = get_s3_client()
     transform_silver_orders(s3, "apex-data-lake", "apex-dead-letter-queue")
     transform_silver_returns(s3, "apex-data-lake", "apex-dead-letter-queue")
     print("\nPhase 5 Silver Layer Transformation Completed Successfully!")
+
 
 if __name__ == "__main__":
     run_silver_transformation()

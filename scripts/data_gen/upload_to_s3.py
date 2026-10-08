@@ -1,4 +1,5 @@
 import os
+
 import boto3
 from botocore.client import Config
 
@@ -9,7 +10,7 @@ s3 = boto3.client(
     aws_access_key_id="test",
     aws_secret_access_key="test",
     config=Config(signature_version="s3v4"),
-    region_name="us-east-1"
+    region_name="us-east-1",
 )
 
 bucket_name = "apex-data-lake"
