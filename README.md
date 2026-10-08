@@ -157,3 +157,14 @@ docker compose stop
 # Hard Reset (Removes containers and wipes all storage volumes clean)
 docker compose down -v
 ```
+---
+
+## 🧪 Testing & Automated CI/CD
+
+The pipeline features unit tests written in `pytest` to validate core transformation logic in memory without needing live infrastructure dependencies.
+
+### Running Tests Locally
+Ensure your virtual environment is active, then run:
+
+```bash
+pytest
