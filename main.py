@@ -5,9 +5,9 @@ import time
 
 
 def run_step(step_name, script_path):
-    print(f"\n==========================================")
+    print("\n==========================================")
     print(f"▶ EXECUTING: {step_name}")
-    print(f"==========================================")
+    print("==========================================")
     start_time = time.time()
     result = subprocess.run([sys.executable, script_path], check=False)
     elapsed = round(time.time() - start_time, 2)
@@ -27,7 +27,7 @@ def main():
         "--engine",
         choices=["default", "pyspark"],
         default="default",
-        help="Select Silver Layer transformation engine (default: pandas/pyarrow | pyspark)",
+        help="Select Silver processing engine (pandas | pyspark)",
     )
     args = parser.parse_args()
 
@@ -42,7 +42,6 @@ def main():
         "scripts/etl/bronze_ingestion.py",
     )
 
-    # Modular routing for Silver Layer transformation
     if args.engine == "pyspark":
         run_step(
             "4. Silver Layer DQ Validation & Quarantine (PySpark DAG)",
@@ -61,7 +60,8 @@ def main():
 
     total_time = round(time.time() - pipeline_start, 2)
     print(
-        f"\n🎉 Lakehouse Pipeline Executed Successfully in {total_time}s! Engine used: {args.engine}"
+        f"\n🎉 Lakehouse Pipeline Executed Successfully in {total_time}s! "
+        f"Engine used: {args.engine}"
     )
 
 

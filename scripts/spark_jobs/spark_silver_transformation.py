@@ -1,14 +1,13 @@
 import os
-import boto3
 from datetime import datetime, timezone
+
+import boto3
 from botocore.client import Config
 from pyspark.sql import SparkSession
 from pyspark.sql import functions as F
 from pyspark.sql.types import DoubleType, TimestampType
 
-PROJECT_ROOT = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), "../../")
-)
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../"))
 HADOOP_DIR = os.path.join(PROJECT_ROOT, ".hadoop")
 if os.path.exists(HADOOP_DIR):
     os.environ["HADOOP_HOME"] = HADOOP_DIR
@@ -26,51 +25,47 @@ def get_s3_client():
 
 
 def promote_spark_part_to_single_file(bucket, temp_folder_key, target_file_key):
-    """
-    Finds the single part-*.parquet file created by PySpark inside a directory key 
-    and copies it to the exact file key expected by Pandas/Boto3 downstream.
-    """
     s3 = get_s3_client()
     response = s3.list_objects_v2(Bucket=bucket, Prefix=temp_folder_key)
-    
+
     part_key = None
     if "Contents" in response:
         for obj in response["Contents"]:
             if obj["Key"].endswith(".parquet") and "part-" in obj["Key"]:
                 part_key = obj["Key"]
                 break
-                
+
     if part_key:
-        # Copy the part file to the exact key path expected by gold_transformation.py
         s3.copy_object(
             Bucket=bucket,
             CopySource={"Bucket": bucket, "Key": part_key},
-            Key=target_file_key
+            Key=target_file_key,
         )
-        # Clean up temporary spark directory artifacts
         for obj in response["Contents"]:
             s3.delete_object(Bucket=bucket, Key=obj["Key"])
 
 
 def get_spark_session():
+    packages = (
+        "org.apache.hadoop:hadoop-aws:3.3.4,"
+        "com.amazonaws:aws-java-sdk-bundle:1.12.262"
+    )
+    provider = "org.apache.hadoop.fs.s3a.SimpleAWSCredentialsProvider"
+    storage_dir = os.path.join(PROJECT_ROOT, "data", "storage")
+
     return (
         SparkSession.builder.appName("ApexSparkSilverTransformation")
-        .config(
-            "spark.jars.packages",
-            "org.apache.hadoop:hadoop-aws:3.3.4,com.amazonaws:aws-java-sdk-bundle:1.12.262",
-        )
+        .config("spark.jars.packages", packages)
         .config("spark.hadoop.fs.s3a.endpoint", "http://localhost:4566")
         .config("spark.hadoop.fs.s3a.access.key", "test")
         .config("spark.hadoop.fs.s3a.secret.key", "test")
         .config("spark.hadoop.fs.s3a.path.style.access", "true")
         .config(
-            "spark.hadoop.fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem"
+            "spark.hadoop.fs.s3a.impl",
+            "org.apache.hadoop.fs.s3a.S3AFileSystem",
         )
-        .config(
-            "spark.hadoop.fs.s3a.aws.credentials.provider",
-            "org.apache.hadoop.fs.s3a.SimpleAWSCredentialsProvider",
-        )
-        .config("spark.hadoop.fs.s3a.buffer.dir", os.path.join(PROJECT_ROOT, "data", "storage"))
+        .config("spark.hadoop.fs.s3a.aws.credentials.provider", provider)
+        .config("spark.hadoop.fs.s3a.buffer.dir", storage_dir)
         .config("spark.hadoop.fs.s3a.fast.upload.buffer", "bytebuffer")
         .config("spark.hadoop.fs.s3a.connection.timeout", "60000")
         .config("spark.hadoop.fs.s3a.connection.establish.timeout", "60000")
@@ -90,9 +85,7 @@ def transform_spark_silver_orders(spark):
     df = (
         df.withColumn("amount_usd", F.col("amount_usd").cast(DoubleType()))
         .withColumn("seller_fee", F.col("seller_fee").cast(DoubleType()))
-        .withColumn(
-            "transaction_date", F.col("transaction_date").cast(TimestampType())
-        )
+        .withColumn("transaction_date", F.col("transaction_date").cast(TimestampType()))
     )
 
     valid_cond = (
@@ -106,35 +99,36 @@ def transform_spark_silver_orders(spark):
     df_clean = (
         df.filter(valid_cond)
         .dropDuplicates(["order_id"])
-        .withColumn(
-            "_processed_at", F.lit(datetime.now(timezone.utc).isoformat())
-        )
+        .withColumn("_processed_at", F.lit(datetime.now(timezone.utc).isoformat()))
     )
 
     df_quarantine = df.filter(~valid_cond).withColumn(
         "_quarantine_reason", F.lit("Failed Schema/DQ rules")
     )
 
-    # Write Spark output to temp folder
     temp_silver_target = "s3a://apex-data-lake/silver/orders_temp/"
     df_clean.coalesce(1).write.mode("overwrite").parquet(temp_silver_target)
-    
-    # Flatten into exact single file key expected by gold_transformation.py
+
     promote_spark_part_to_single_file(
-        "apex-data-lake", "silver/orders_temp/", "silver/orders/orders_clean.parquet"
+        "apex-data-lake",
+        "silver/orders_temp/",
+        "silver/orders/orders_clean.parquet",
     )
-    print("Clean Orders saved via Spark -> s3a://apex-data-lake/silver/orders/orders_clean.parquet")
+    print("Clean Orders saved via Spark -> silver/orders/orders_clean.parquet")
 
     if df_quarantine.count() > 0:
         ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
         dlq_temp = f"s3a://apex-dead-letter-queue/silver_quarantine_temp_{ts}/"
         df_quarantine.coalesce(1).write.mode("overwrite").parquet(dlq_temp)
         promote_spark_part_to_single_file(
-            "apex-dead-letter-queue", 
-            f"silver_quarantine_temp_{ts}/", 
+            "apex-dead-letter-queue",
+            f"silver_quarantine_temp_{ts}/",
+            f"silver_quarantine/orders_quarantine_{ts}.parquet",
+        )
+        print(
+            "Quarantined Orders saved via Spark -> "
             f"silver_quarantine/orders_quarantine_{ts}.parquet"
         )
-        print(f"Quarantined Orders saved via Spark -> s3a://apex-dead-letter-queue/silver_quarantine/orders_quarantine_{ts}.parquet")
 
 
 def transform_spark_silver_returns(spark):
@@ -162,17 +156,17 @@ def transform_spark_silver_returns(spark):
     df_clean = (
         df.filter(valid_cond)
         .dropDuplicates([return_id_col])
-        .withColumn(
-            "_processed_at", F.lit(datetime.now(timezone.utc).isoformat())
-        )
+        .withColumn("_processed_at", F.lit(datetime.now(timezone.utc).isoformat()))
     )
 
     temp_returns_target = "s3a://apex-data-lake/silver/returns_temp/"
     df_clean.coalesce(1).write.mode("overwrite").parquet(temp_returns_target)
     promote_spark_part_to_single_file(
-        "apex-data-lake", "silver/returns_temp/", "silver/returns/returns_clean.parquet"
+        "apex-data-lake",
+        "silver/returns_temp/",
+        "silver/returns/returns_clean.parquet",
     )
-    print("Clean Returns saved via Spark -> s3a://apex-data-lake/silver/returns/returns_clean.parquet")
+    print("Clean Returns saved via Spark -> silver/returns/returns_clean.parquet")
 
 
 def run_spark_silver_transformation():
