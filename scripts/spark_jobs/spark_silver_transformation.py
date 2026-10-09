@@ -7,9 +7,7 @@ from pyspark.sql import SparkSession
 from pyspark.sql import functions as F
 from pyspark.sql.types import DoubleType, TimestampType
 
-PROJECT_ROOT = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), "../../")
-)
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../"))
 HADOOP_DIR = os.path.join(PROJECT_ROOT, ".hadoop")
 if os.path.exists(HADOOP_DIR):
     os.environ["HADOOP_HOME"] = HADOOP_DIR
@@ -80,18 +78,14 @@ def get_spark_session():
 
 def transform_spark_silver_orders(spark):
     print("--- Spark: Processing Orders (Bronze -> Silver) ---")
-    bronze_path = (
-        "s3a://apex-data-lake/bronze/orders_raw/orders_raw_bronze.parquet"
-    )
+    bronze_path = "s3a://apex-data-lake/bronze/orders_raw/orders_raw_bronze.parquet"
 
     df = spark.read.parquet(bronze_path)
 
     df = (
         df.withColumn("amount_usd", F.col("amount_usd").cast(DoubleType()))
         .withColumn("seller_fee", F.col("seller_fee").cast(DoubleType()))
-        .withColumn(
-            "transaction_date", F.col("transaction_date").cast(TimestampType())
-        )
+        .withColumn("transaction_date", F.col("transaction_date").cast(TimestampType()))
     )
 
     valid_cond = (
@@ -105,9 +99,7 @@ def transform_spark_silver_orders(spark):
     df_clean = (
         df.filter(valid_cond)
         .dropDuplicates(["order_id"])
-        .withColumn(
-            "_processed_at", F.lit(datetime.now(timezone.utc).isoformat())
-        )
+        .withColumn("_processed_at", F.lit(datetime.now(timezone.utc).isoformat()))
     )
 
     df_quarantine = df.filter(~valid_cond).withColumn(
@@ -141,9 +133,7 @@ def transform_spark_silver_orders(spark):
 
 def transform_spark_silver_returns(spark):
     print("--- Spark: Processing Returns (Bronze -> Silver) ---")
-    bronze_path = (
-        "s3a://apex-data-lake/bronze/returns_raw/returns_raw_bronze.parquet"
-    )
+    bronze_path = "s3a://apex-data-lake/bronze/returns_raw/returns_raw_bronze.parquet"
 
     df = spark.read.parquet(bronze_path)
 
@@ -161,16 +151,12 @@ def transform_spark_silver_returns(spark):
             "processed_timestamp", F.col("return_date").cast(TimestampType())
         )
 
-    valid_cond = (
-        F.col(return_id_col).isNotNull() & F.col(order_id_col).isNotNull()
-    )
+    valid_cond = F.col(return_id_col).isNotNull() & F.col(order_id_col).isNotNull()
 
     df_clean = (
         df.filter(valid_cond)
         .dropDuplicates([return_id_col])
-        .withColumn(
-            "_processed_at", F.lit(datetime.now(timezone.utc).isoformat())
-        )
+        .withColumn("_processed_at", F.lit(datetime.now(timezone.utc).isoformat()))
     )
 
     temp_returns_target = "s3a://apex-data-lake/silver/returns_temp/"
